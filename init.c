@@ -103,9 +103,9 @@ pte_t *get_pte(pde_t * pgdir, uintptr_t la, int create){
 		pdep_map(pdt_entry_low+1, (uintptr_t)PADDR(pdt)+1024);
 		pdep_map(pdt_entry_low+2, (uintptr_t)PADDR(pdt)+1024*2);
 		pdep_map(pdt_entry_low+3, (uintptr_t)PADDR(pdt)+1024*3);
-	}else{
-		pdt = (pde_t*)KADDR(PDE_ADDR(*pdt_entry));
 	}
+
+	pdt = (pde_t*)KADDR(PDE_ADDR(*pdt_entry));
 
 	pte_t *ptep = (pte_t*)&pdt[PTX(la)];
 	return ptep;
@@ -150,7 +150,7 @@ void boot_pg_init(){
 	boot_map_segment(boot_pgdir, IO_SPACE_START, IO_SPACE_SIZE, IO_SPACE_START, PTE_W | PTE_IOMEM);
 
 	boot_map_segment(boot_pgdir, 0xFFFF0000, PAGE_SIZE, SDRAM0_START, PTE_PWT | PTE_W );	// high location of vector table
-
+	__print_hex(*get_pte(boot_pgdir, 0xffff0000, 0));
 	ttbSet((uint32_t)PADDR(boot_pgdir));
 	//ttbSet(0x4000);
 

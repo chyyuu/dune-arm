@@ -79,11 +79,11 @@
 
 // address in page table or page directory entry
 #define PTE_ADDR(pte)   ((uintptr_t)(pte) & ~0xFFF)
-#define PDE_ADDR(pde)   ((uintptr_t)(pde) & ~0xFFF)
+#define PDE_ADDR(pde)   ((uintptr_t)(pde) & ~0x3FF)
 
 // PTE_xxx are the ucore flags
 // PTEX_xxx and PTE_LX_xxx are the hardware flags
-#define PTE_STATUS(pte) (pte + 512)
+//#define PTE_STATUS(pte) (pte + 512)
 
 /* page table/directory entry flags used for the bit status PT */
 #define PTE_P           0x001	// Present
