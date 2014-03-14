@@ -10,6 +10,7 @@ void *__memmove(void *dst, const void *src, size_t n)
 void *__memcpy(void *dst, const void *src, size_t n)
     __attribute__ ((always_inline));
 
+#if 0
 //#define memset __memset
 #define memcpy __memcpy
 
@@ -20,6 +21,7 @@ static inline void *memset(void *s, int c, size_t n)
 		*p++ = (unsigned char)c;
 	return s;
 }
+#endif
 
 /* *
  * Rounding operations (efficient when n is a power of 2)

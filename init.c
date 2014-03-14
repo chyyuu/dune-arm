@@ -2,6 +2,7 @@
 #include "mmu.h"
 #include "trap.h"
 #include "param.h"
+#include <string.h>
 #include <sys/queue.h>
 
 void __print_hex(uint32_t hex){
@@ -150,7 +151,7 @@ void boot_pg_init(){
 	boot_map_segment(boot_pgdir, IO_SPACE_START, IO_SPACE_SIZE, IO_SPACE_START, PTE_W | PTE_IOMEM);
 
 	boot_map_segment(boot_pgdir, 0xFFFF0000, PAGE_SIZE, SDRAM0_START, PTE_PWT | PTE_W );	// high location of vector table
-	__print_hex(*get_pte(boot_pgdir, 0xffff0000, 0));
+
 	ttbSet((uint32_t)PADDR(boot_pgdir));
 	//ttbSet(0x4000);
 
@@ -169,13 +170,19 @@ void kern_init(){
 
 	boot_pg_init();
 
+	write(1, "A",1);
 	*(int*)0= 0x1238;
 	while(1);
 	return;
 }
 
+static void trap_dispatch(struct trapframe *tf)
+{
+}
+
 void trap(struct trapframe *tf){
 	*(int*)0xf0000000 = 0x1237;
+	trap_dispatch(tf);
 	while(1);
 }
 

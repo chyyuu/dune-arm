@@ -26,6 +26,11 @@ SECTIONS {
         PROVIDE(__initcall_end = .);
     }
 
+    .ARM.extab   : { *(.ARM.extab* .gnu.linkonce.armextab.*) }
+    PROVIDE_HIDDEN (__exidx_start = .);
+    .ARM.exidx   : { *(.ARM.exidx* .gnu.linkonce.armexidx.*) }
+    PROVIDE_HIDDEN (__exidx_end = .);
+
     . = ALIGN(4096);
     PROVIDE(__kernel_text_end = .);
     PROVIDE(etext = .); /* Define the 'etext' symbol to this value */
