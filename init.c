@@ -170,6 +170,8 @@ void kern_init(){
 
 	boot_pg_init();
 
+	//switch to sys mode
+
 	write(1, "A",1);
 	*(int*)0= 0x1238;
 	while(1);
@@ -178,6 +180,15 @@ void kern_init(){
 
 static void trap_dispatch(struct trapframe *tf)
 {
+	switch(tf->tf_trapno){
+		case T_PABT:
+		case T_DABT:
+		case T_SWI:
+		case T_IRQ:
+		case T_UNDEF:
+		default:
+			break;
+	}
 }
 
 void trap(struct trapframe *tf){
