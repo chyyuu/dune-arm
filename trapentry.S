@@ -366,3 +366,20 @@ forkrets:
   beq ret_to_user
   svc_return
 
+/* void switch_to_sys(struct trapframe*) */
+.global switch_to_sys
+switch_to_sys:
+	mov sp, r0
+	ldr	r1, [sp, #S_PSR]		@ get calling cpsr
+	ldr	lr, [sp, #S_PC]!		@ get pc
+	msr	spsr_cxsf, r1			@ save in spsr_svc
+	ldmdb	sp, {r0 - lr}^			@ get calling r0 - lr
+	mov	r0, r0
+	add	sp, sp, #S_FRAME_SIZE - S_PC
+	movs	pc, lr				@ return & move spsr_svc into cpsr
+
+.global __sys_entry
+__sys_entry:
+	b sys_entry
+
+

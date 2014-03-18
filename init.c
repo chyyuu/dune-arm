@@ -4,6 +4,8 @@
 #include "param.h"
 #include <string.h>
 #include <sys/queue.h>
+#include <elf.h>
+#include "../kvm_test/elf_loader.h"
 
 void __print_hex(uint32_t hex){
 	asm volatile(
@@ -27,7 +29,7 @@ static void clear_bss(){
 static inline void exception_vector_init(void)
 {
 	extern char __vector_table, __vector_table_end;
-	memcpy((void *)0, (void *)&__vector_table,
+	memcpy((void *)PHYS_OFFSET, (void *)&__vector_table,
 	       &__vector_table_end - &__vector_table);
 }
 
@@ -145,7 +147,7 @@ void boot_pg_init(){
 	boot_pgdir = (pde_t*)ROUNDUP((uintptr_t)__boot_pgtlb, 4*PAGE_SIZE);
 	memset(boot_pgdir, 0, 4*PAGE_SIZE);
 
-	boot_map_segment(boot_pgdir, PAGE_OFFSET, num_kern_pages * PAGE_SIZE,
+	boot_map_segment(boot_pgdir, PAGE_OFFSET, KMEMSIZE,
 			PHYS_OFFSET, PTE_W);
 
 	boot_map_segment(boot_pgdir, IO_SPACE_START, IO_SPACE_SIZE, IO_SPACE_START, PTE_W | PTE_IOMEM);
@@ -156,10 +158,40 @@ void boot_pg_init(){
 	//ttbSet(0x4000);
 
 	tlb_invalidate_all();
-	__print_hex(0x124);
 
 }
 
+/*
+static void load_linker(){
+	extern char _binary_linker_start[], _binary_linker_end[];
+	size_t _linker_len = _binary_linker_end - _binary_linker_start;
+	Elf32_Ehdr *elf = (Elf32_Ehdr*)_binary_linker_start;
+	if(elf->e_ident[0] != EI_MAG0
+	|| elf->e_ident[1] != EI_MAG1
+	|| elf->e_ident[2] != EI_MAG2
+	|| elf->e_ident[3] != EI_MAG3
+	)
+		return;
+	uint32_t real_entry;
+	uint32_t is_dynamic = 0, interp_idx;
+	uint32_t base_addr = 0;
+	uint32_t vm_flags, phnum;
+	real_entry = elf->e_entry;
+	for (phnum = 0; phnum < elf->e_phnum; phnum++) {
+		size_t phoff = elf->e_phoff + sizeof(Elf32_Phdr) * phnum;
+		Elf32_Phdr *phdr = (Elf32_Phdr*)(phoff + _binary_linker_start);
+
+	}
+}
+*/
+
+void hyper_map_region(struct elf_info *);
+extern void switch_to_sys(struct trapframe*);
+extern void __sys_entry();
+extern char sys_stacktop[];
+ extern void v7_flush_kern_dcache_area(void *addr, size_t size);
+
+static struct elf_info elf_info;
 void kern_init(){
 	clear_bss();
 
@@ -170,22 +202,44 @@ void kern_init(){
 
 	boot_pg_init();
 
-	//switch to sys mode
+	hyper_map_region((struct elf_info*)PADDR(&elf_info));
+	//v7_flush_kern_cache_all();
+	v7_flush_kern_dcache_area(&elf_info, sizeof(elf_info));
 
-	write(1, "A",1);
-	*(int*)0= 0x1238;
-	while(1);
+	__print_hex(elf_info.entry);
+
+	//switch to sys mode
+	struct trapframe tf;
+	memset(&tf, 0, sizeof(tf));
+	tf.tf_regs.reg_r[0] = 0;
+	tf.tf_regs.ARM_sp = (uintptr_t)sys_stacktop;
+	tf.tf_regs.ARM_pc = (uintptr_t)__sys_entry;
+	//XXX enable int
+	tf.tf_sr = ARM_SR_MODE_SYS;
+	switch_to_sys(&tf);
+
 	return;
 }
 
+void sys_entry(){
+	write(1, "A",1);
+	while(1);
+}
+
+int syscall_passthrough(struct trapframe*);
 static void trap_dispatch(struct trapframe *tf)
 {
+	int ret;
 	switch(tf->tf_trapno){
 		case T_PABT:
 		case T_DABT:
+			break;
 		case T_SWI:
+			ret = syscall_passthrough(tf);
+			break;
 		case T_IRQ:
 		case T_UNDEF:
+			break;
 		default:
 			break;
 	}

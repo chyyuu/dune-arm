@@ -4,7 +4,7 @@ CC=$(CROSS_COMPILE)gcc
 LD=$(CROSS_COMPILE)ld
 OBJCOPY=$(CROSS_COMPILE)objcopy
 TARGET:=payload
-OBJS:=entry.o init.o vectors.o trapentry.o
+OBJS:=entry.o init.o vectors.o trapentry.o syscall.o
 #OBJS+= eabi_utils.o
 #OBJS+= memcpy.o memset.o 
 CFLAGS=-march=armv7-a -I../linux_header_313_arm/include -O2 -marm
@@ -23,7 +23,7 @@ install: $(TARGET)
 	cp $(TARGET) ../kvm_test
 .PHONY: install
 
-$(TARGET): $(OBJS)
+$(TARGET): $(OBJS) __linker.o
 	$(LD) $(LDFLAGS) -T payload.ld -o $@ $^ -lc -lgcc
 
 %.o: %.S
@@ -31,6 +31,9 @@ $(TARGET): $(OBJS)
 
 %.o: %.c $(HEADERS)
 	$(CC) -c -o $@ $(CFLAGS) $<
+
+__linker.o: linker
+	$(OBJCOPY) --input binary --output elf32-littlearm --binary-architecture arm linker $@
 
 clean:
 	rm -f *.o $(TARGET)

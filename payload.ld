@@ -82,10 +82,6 @@ SECTIONS {
         *(.data)
         *(.init.data)
         . = ALIGN(4096);
-    PROVIDE(initrd_begin = .);
-      *(.initrd)
-      . = ALIGN(4096); 
-    PROVIDE(initrd_end = .);
     }
 
     PROVIDE(edata = .);

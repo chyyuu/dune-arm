@@ -63,6 +63,20 @@
 #define S_R0		0
 #define S_OFF		8
 
+#define ARM_SR_MODE_ABT   0x17
+#define ARM_SR_MODE_FIQ   0x11
+#define ARM_SR_MODE_IRQ   0x12
+#define ARM_SR_MODE_SVC   0x13
+#define ARM_SR_MODE_SYS   0x1F
+#define ARM_SR_MODE_UND   0x1B
+#define ARM_SR_MODE_USR   0x10
+
+#define ARM_SR_I          (1<<7)
+#define ARM_SR_F          (1<<6)
+#define ARM_SR_T          (1<<5)
+
+
+
 #ifndef __ASSEMBLER__
 
 #include <stdint.h>

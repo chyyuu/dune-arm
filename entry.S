@@ -64,10 +64,14 @@ kern_entry:
 	ldr sp,=sys_stacktop
 	msr cpsr_c,#(DISABLE_IRQ|DISABLE_FIQ|SVC_MOD)
 
+/* enable swp,flow prediction */
+  ldr r1, =(1<<11)|(1<<10)
+  MCR p15, 0, r1, c1, c0, 0
 #in SVC mode
 relocated:
 	ldr sp,=bootstacktop
 
+#if 0
     # enable the FPU
     mrc p15, 0, r0, c1, c0, 2
     orr r0, r0, #0x300000            /* single precision */
@@ -76,16 +80,21 @@ relocated:
     mov r0, #0x40000000
     fmxr fpexc,r0
 
-
 /* enable swp,flow prediction */
   ldr r1, =(1<<11)|(1<<10)
   MCR p15, 0, r1, c1, c0, 0
-
 
 ttest:
 	bl __create_pgtbl
 
 	b __enable_mmu
+#endif
+	ldr r0, =kern_init
+
+	# goto kern_init
+	mov pc, r0
+
+
 
 ###################################################################
 
@@ -246,7 +255,8 @@ und_stack:
 .space 64
 und_stacktop:
 sys_stack:
-.space 64
+.space KSTACKSIZE
+.global sys_stacktop
 sys_stacktop:
     .globl bootstack
 bootstack:
