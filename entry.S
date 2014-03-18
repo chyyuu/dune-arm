@@ -50,6 +50,13 @@ kern_entry:
 	bic r0, r0, #(DISABLE_FIQ|DISABLE_IRQ)
 	msr cpsr, r0
 
+	/* enable swp,flow prediction */
+	ldr r1, =(1<<11)|(1<<10)
+	MCR p15, 0, r1, c1, c0, 0
+
+	/* L1 Cache */
+
+
 # Stack inititialization - starts in SVC mode
 # only 12bytes are used in these stacks, see trapentry.S
 	msr cpsr_c,#(DISABLE_IRQ|DISABLE_FIQ|IRQ_MOD)
@@ -64,9 +71,6 @@ kern_entry:
 	ldr sp,=sys_stacktop
 	msr cpsr_c,#(DISABLE_IRQ|DISABLE_FIQ|SVC_MOD)
 
-/* enable swp,flow prediction */
-  ldr r1, =(1<<11)|(1<<10)
-  MCR p15, 0, r1, c1, c0, 0
 #in SVC mode
 relocated:
 	ldr sp,=bootstacktop
@@ -89,6 +93,7 @@ ttest:
 
 	b __enable_mmu
 #endif
+
 	ldr r0, =kern_init
 
 	# goto kern_init

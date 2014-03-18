@@ -60,7 +60,7 @@ void page_init(){
 
 	pages = (struct page*)ROUNDUP((void*)end, PAGE_SIZE);
 
-	int start = (end_pa + ROUNDUP(MAX_PAGES*sizeof(struct page), PAGE_SIZE)) / PAGE_SIZE;
+	int start = (end_pa - PHYS_OFFSET + ROUNDUP(MAX_PAGES*sizeof(struct page), PAGE_SIZE)) / PAGE_SIZE;
 	num_pages = KMEMSIZE / PAGE_SIZE;
 	num_kern_pages = start;
 
@@ -141,7 +141,61 @@ boot_map_segment(pde_t * pgdir, uintptr_t la, size_t size, uintptr_t pa,
 	}
 }
 
+/* 16 domains */
+static void domainAccessSet(uint32_t value, uint32_t mask)
+{
+	uint32_t c3format;
+	asm volatile ("MRC p15, 0, %0, c3, c0, 0"	/* read domain register */
+		      :"=r" (c3format)
+	    );
+	c3format &= ~mask;	/* clear bits that change */
+	c3format |= value;	/* set bits that change */
+	asm volatile ("MCR p15, 0, %0, c3, c0, 0"	/* write domain register */
+		      ::"r" (c3format)
+	    );
+}
 
+/* controlSet
+ * sets the control bits register in CP15:c1 */
+static void controlSet(uint32_t value, uint32_t mask)
+{
+	uint32_t c1format;
+	asm volatile ("MRC p15, 0, %0, c1, c0, 0"	/* read control register */
+		      :"=r" (c1format)
+	    );
+	c1format &= ~mask;	/* clear bits that change */
+	c1format |= value;	/* set bits that change */
+	asm volatile ("MCR p15, 0, %0, c1, c0, 0"	/* write control register */
+		      ::"r" (c1format)
+	    );
+}
+
+/* mmu_init - initialize the virtual memory management */
+// Supposed already attached and initialized
+/* 1. Initialize the page tables in main memory by filling them with FAULT entries.
+ * 2. Fill in the page tables with translations that map regions to physical memory.
+ * 3. Activate the page tables.
+ * 4. Assign domain access rights.
+ * 5. Enable the memory management unit and cache hardware.
+ * */
+void mmu_init(void)
+{
+	uint32_t enable, change;
+
+	/* Part 4 Set Domain Access */
+	domainAccessSet(DOM3CLT, CHANGEALLDOM);	/* set Domain Access */
+
+	/* Part 5 Enable MMU, caches and write buffer */
+	enable = ENABLEMMU | ENABLEICACHE | ENABLEDCACHE | ENABLEHIGHEVT;
+	change = CHANGEMMU | CHANGEICACHE | CHANGEDCACHE | CHANGEHIGHEVT;
+#ifdef __MACH_ARM_ARMV6
+	enable |= ENABLENEWPT;
+	change |= CHANGENEWPT;
+#endif
+
+	/* enable cache and MMU */
+	controlSet(enable, change);
+}
 
 void boot_pg_init(){
 	boot_pgdir = (pde_t*)ROUNDUP((uintptr_t)__boot_pgtlb, 4*PAGE_SIZE);
@@ -157,6 +211,7 @@ void boot_pg_init(){
 	ttbSet((uint32_t)PADDR(boot_pgdir));
 	//ttbSet(0x4000);
 
+	mmu_init();
 	tlb_invalidate_all();
 
 }
