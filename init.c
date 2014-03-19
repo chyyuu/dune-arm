@@ -246,6 +246,15 @@ extern void __sys_entry();
 extern char sys_stacktop[];
  extern void v7_flush_kern_dcache_area(void *addr, size_t size);
 
+static void build_elf_mapping(pde_t *pgdir, struct elf_info *info)
+{
+	int i;
+	for(i = 0; i < info->nmap; i++){
+		boot_map_segment(pgdir, info->mapping[i].addr, info->mapping[i].limit, info->mapping[i].addr, PTE_W);
+	}
+	tlb_invalidate_all();
+}
+
 static struct elf_info elf_info;
 void kern_init(){
 	clear_bss();
@@ -261,14 +270,18 @@ void kern_init(){
 	//v7_flush_kern_cache_all();
 	v7_flush_kern_dcache_area(&elf_info, sizeof(elf_info));
 
-	__print_hex(elf_info.entry);
+	build_elf_mapping(boot_pgdir, &elf_info);
+
+	__print_hex(*(int*)elf_info.stacktop);
 
 	//switch to sys mode
 	struct trapframe tf;
 	memset(&tf, 0, sizeof(tf));
 	tf.tf_regs.reg_r[0] = 0;
-	tf.tf_regs.ARM_sp = (uintptr_t)sys_stacktop;
-	tf.tf_regs.ARM_pc = (uintptr_t)__sys_entry;
+	tf.tf_regs.ARM_sp = (uintptr_t)elf_info.stacktop;
+	//__print_hex(elf_info.stacktop);
+	tf.tf_regs.ARM_pc = (uintptr_t)elf_info.entry;
+	//tf.tf_regs.ARM_pc = (uintptr_t)__sys_entry;
 	//XXX enable int
 	tf.tf_sr = ARM_SR_MODE_SYS;
 	switch_to_sys(&tf);
@@ -277,17 +290,31 @@ void kern_init(){
 }
 
 void sys_entry(){
-	write(1, "A",1);
+	__print_hex(*(int*)elf_info.entry);
 	while(1);
 }
 
 int syscall_passthrough(struct trapframe*);
+
+static int pgfault_handler(struct trapframe *tf){
+	__print_hex(0xff001111);
+	uint32_t badaddr = 0;
+	if (tf->tf_trapno == T_PABT) {
+		badaddr = tf->tf_epc;
+	} else {
+		badaddr = far();
+	}
+	__print_hex(badaddr);
+	return 0;
+}
+
 static void trap_dispatch(struct trapframe *tf)
 {
 	int ret;
 	switch(tf->tf_trapno){
 		case T_PABT:
 		case T_DABT:
+			pgfault_handler(tf);
 			break;
 		case T_SWI:
 			ret = syscall_passthrough(tf);

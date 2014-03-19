@@ -178,6 +178,15 @@ inline static void tlb_invalidate_all()
 	isb();
 }
 
+static inline uint32_t far(void)
+{
+	uint32_t c6format;
+	asm volatile ("MRC p15, 0, %0, c6, c0, 0;"	//read data in fault address register
+		      :"=r" (c6format));
+	return c6format;
+}
+
+
 // L2 PTE setter
 // Set the ucore flags directly, and the hardware flags under condition
 // flags are PTE_xxx
