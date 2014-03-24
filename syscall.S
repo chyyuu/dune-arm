@@ -4,13 +4,12 @@
 .text
 .align 4
 
-/* int syscall_passthrough(struct trapframe *) */
+/* void syscall_passthrough(struct trapframe *) */
 /* XXX do hvc? */
 .global syscall_passthrough
 syscall_passthrough:
 	ldr r2, =0xf0000004
-	mov r1, #0
-	str r1, [r2]
+	str r0, [r2]
 	mov pc, lr
 
 

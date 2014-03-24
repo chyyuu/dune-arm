@@ -1,6 +1,7 @@
 #ifndef __KERN_TRAP_TRAP_H__
 #define __KERN_TRAP_TRAP_H__
 
+#ifndef TRAP_USER_INC
 /* Trap Numbers */
 
 /* Processor-defined: */
@@ -75,18 +76,12 @@
 #define ARM_SR_F          (1<<6)
 #define ARM_SR_T          (1<<5)
 
+#endif
 
 
 #ifndef __ASSEMBLER__
 
 #include <stdint.h>
-
-#if 0
-/* General purpose registers minus fp, sp and pc */
-struct pushregs {
-	uint32_t reg_r[13];
-};
-#endif
 
 /*
  * This struct defines the way the registers are stored on the
@@ -97,6 +92,7 @@ struct pushregs {
 	long reg_r[18];
 };
 
+#ifndef TRAP_USER_INC
 #define ARM_cpsr	reg_r[16]
 #define ARM_pc		reg_r[15]
 #define ARM_lr		reg_r[14]
@@ -138,6 +134,8 @@ struct pushregs {
 #define tf_sr  tf_regs.ARM_cpsr
 #define tf_esp tf_regs.ARM_sp
 #define __tf_user_lr tf_regs.ARM_lr
+
+#endif
 
 /* Trapframe structure
  *   Structure built in the exception stack

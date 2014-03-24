@@ -272,7 +272,7 @@ void kern_init(){
 
 	build_elf_mapping(boot_pgdir, &elf_info);
 
-	__print_hex(*(int*)elf_info.stacktop);
+	//__print_hex(*(int*)elf_info.stacktop);
 
 	//switch to sys mode
 	struct trapframe tf;
@@ -294,7 +294,7 @@ void sys_entry(){
 	while(1);
 }
 
-int syscall_passthrough(struct trapframe*);
+void syscall_passthrough(struct trapframe*);
 
 static int pgfault_handler(struct trapframe *tf){
 	__print_hex(0xff001111);
@@ -317,10 +317,13 @@ static void trap_dispatch(struct trapframe *tf)
 			pgfault_handler(tf);
 			break;
 		case T_SWI:
-			ret = syscall_passthrough(tf);
+			v7_flush_kern_cache_all();
+			syscall_passthrough(PADDR(tf));
+			v7_flush_kern_dcache_area(tf, sizeof(*tf));
 			break;
 		case T_IRQ:
 		case T_UNDEF:
+			__print_hex(0x32423);
 			break;
 		default:
 			break;
@@ -328,8 +331,6 @@ static void trap_dispatch(struct trapframe *tf)
 }
 
 void trap(struct trapframe *tf){
-	*(int*)0xf0000000 = 0x1237;
 	trap_dispatch(tf);
-	while(1);
 }
 
