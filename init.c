@@ -283,6 +283,7 @@ void kern_init(){
 	tf.tf_regs.ARM_pc = (uintptr_t)elf_info.entry;
 	//tf.tf_regs.ARM_pc = (uintptr_t)__sys_entry;
 	//XXX enable int
+	//tf.tf_sr = ARM_SR_MODE_SYS;
 	tf.tf_sr = ARM_SR_MODE_SYS;
 	switch_to_sys(&tf);
 
@@ -297,7 +298,6 @@ void sys_entry(){
 void syscall_passthrough(struct trapframe*);
 
 static int pgfault_handler(struct trapframe *tf){
-	__print_hex(0xff001111);
 	uint32_t badaddr = 0;
 	if (tf->tf_trapno == T_PABT) {
 		badaddr = tf->tf_epc;
@@ -305,6 +305,8 @@ static int pgfault_handler(struct trapframe *tf){
 		badaddr = far();
 	}
 	__print_hex(badaddr);
+	//XXX
+	while(1);
 	return 0;
 }
 

@@ -180,7 +180,7 @@ __und_svc:
   svc_return
 
 __und_usr:
-	usr_entry
+  usr_entry
   do_trap T_UNDEF
   b ret_to_user
 
@@ -274,7 +274,7 @@ __stubs_start:
 	.long	__irq_invalid			@  c
 	.long	__irq_invalid			@  d
 	.long	__irq_invalid			@  e
-	.long	__irq_invalid			@  f
+	.long	__irq_usr			@  f (SYS)
 
 /*
  * Data abort dispatcher
@@ -297,7 +297,7 @@ __stubs_start:
 	.long	__dabt_invalid			@  c
 	.long	__dabt_invalid			@  d
 	.long	__dabt_invalid			@  e
-	.long	__dabt_invalid			@  f
+	.long	__dabt_usr			@  f (SYS_26 / SYS_32)
 
 /*
  * Prefetch abort dispatcher
@@ -320,7 +320,7 @@ __stubs_start:
 	.long	__pabt_invalid			@  c
 	.long	__pabt_invalid			@  d
 	.long	__pabt_invalid			@  e
-	.long	__pabt_invalid			@  f
+	.long	__pabt_usr			@  f (SYS)
 
 /*
  * Undef instr entry dispatcher
