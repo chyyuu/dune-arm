@@ -6,6 +6,7 @@
 #include <sys/queue.h>
 #include <elf.h>
 #include "../kvm_test/elf_loader.h"
+#include "../kvm_test/syscall_nr.h"
 
 void __print_hex(uint32_t hex){
 	asm volatile(
@@ -298,6 +299,7 @@ void sys_entry(){
 void syscall_passthrough(struct trapframe*);
 
 static int pgfault_handler(struct trapframe *tf){
+	__print_hex(0xff001111);
 	uint32_t badaddr = 0;
 	if (tf->tf_trapno == T_PABT) {
 		badaddr = tf->tf_epc;
@@ -310,6 +312,39 @@ static int pgfault_handler(struct trapframe *tf){
 	return 0;
 }
 
+static int __sys_brk(struct trapframe *tf){
+	int heap_idx = ELF_GET_HEAP_IDX(elf_info);
+	uintptr_t oldbrk = elf_info.mapping[heap_idx].addr + elf_info.mapping[heap_idx].limit;
+
+	syscall_passthrough(PADDR(tf));
+	v7_flush_kern_dcache_area(tf, sizeof(*tf));
+
+	uintptr_t newbrk = tf->tf_regs.reg_r[0];
+	if(oldbrk < newbrk){
+		boot_map_segment(boot_pgdir, oldbrk, newbrk - oldbrk, oldbrk, PTE_W);
+	}else if(oldbrk > newbrk){
+		//TODO
+		__print_hex(0x1231213);
+		while(1);
+	}/* else do nothing */
+	size_t new_size = newbrk - elf_info.mapping[heap_idx].addr;
+	elf_info.mapping[heap_idx].limit = new_size;
+	return 0;
+}
+
+static inline void do_syscall(struct trapframe *tf){
+	int num = tf->tf_regs.reg_r[7];
+	switch(num){
+		case __NR_brk:
+			__sys_brk(tf);
+			break;
+		default:
+			v7_flush_kern_cache_all();
+			syscall_passthrough(PADDR(tf));
+			v7_flush_kern_dcache_area(tf, sizeof(*tf));
+	}
+}
+
 static void trap_dispatch(struct trapframe *tf)
 {
 	int ret;
@@ -319,9 +354,7 @@ static void trap_dispatch(struct trapframe *tf)
 			pgfault_handler(tf);
 			break;
 		case T_SWI:
-			v7_flush_kern_cache_all();
-			syscall_passthrough(PADDR(tf));
-			v7_flush_kern_dcache_area(tf, sizeof(*tf));
+			do_syscall(tf);
 			break;
 		case T_IRQ:
 		case T_UNDEF:
