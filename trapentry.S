@@ -343,7 +343,7 @@ __stubs_start:
 	.long	__und_invalid			@  c
 	.long	__und_invalid			@  d
 	.long	__und_invalid			@  e
-	.long	__und_invalid			@  f
+	.long	__und_usr			@  f (SVC)
 
 ret_to_user:
 	@ slow_restore_user_regs

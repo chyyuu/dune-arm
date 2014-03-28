@@ -7,7 +7,7 @@ TARGET:=payload
 OBJS:=entry.o init.o vectors.o trapentry.o syscall.o
 #OBJS+= eabi_utils.o
 #OBJS+= memcpy.o memset.o 
-CFLAGS=-march=armv7-a -I../linux_header_313_arm/include -O2 -marm
+CFLAGS=-mcpu=cortex-a15 -I../linux_header_313_arm/include -O2 -marm
 CFLAGS+=-I../arm-linux-uclibc/usr/include
 
 CFLAGS+=-D__LINUX_ARM_ARCH__=7
@@ -23,8 +23,11 @@ install: $(TARGET)
 	cp $(TARGET) ../kvm_test
 .PHONY: install
 
-$(TARGET): $(OBJS) __linker.o
+$(TARGET): $(OBJS)
 	$(LD) $(LDFLAGS) -T payload.ld -o $@ $^ -lc -lgcc
+
+syscall.o: syscall.S
+	$(CC) -D__ASSEMBLY__ -c -o $@ $(CFLAGS) $<
 
 %.o: %.S
 	$(CC) -D__ASSEMBLY__ -c -o $@ $(CFLAGS) $<

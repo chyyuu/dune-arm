@@ -297,6 +297,7 @@ void sys_entry(){
 }
 
 void syscall_passthrough(struct trapframe*);
+void syscall_passthrough_fast(struct pushregs*);
 
 static int pgfault_handler(struct trapframe *tf){
 	__print_hex(0xff001111);
@@ -340,7 +341,8 @@ static inline void do_syscall(struct trapframe *tf){
 			break;
 		default:
 			v7_flush_kern_cache_all();
-			syscall_passthrough(PADDR(tf));
+			//syscall_passthrough(PADDR(tf));
+			syscall_passthrough_fast(&tf->tf_regs);
 			v7_flush_kern_dcache_area(tf, sizeof(*tf));
 	}
 }
@@ -359,6 +361,7 @@ static void trap_dispatch(struct trapframe *tf)
 		case T_IRQ:
 		case T_UNDEF:
 			__print_hex(0x32423);
+			while(1);
 			break;
 		default:
 			break;
