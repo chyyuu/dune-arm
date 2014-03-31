@@ -4,6 +4,7 @@
 #include "param.h"
 #include <string.h>
 #include <sys/queue.h>
+#include <sys/time.h>
 #include <elf.h>
 #include "../kvm_test/elf_loader.h"
 #include "../kvm_test/syscall_nr.h"
@@ -113,6 +114,17 @@ pte_t *get_pte(pde_t * pgdir, uintptr_t la, int create){
 
 	pte_t *ptep = (pte_t*)&pdt[PTX(la)];
 	return ptep;
+}
+
+int map_page(pde_t *pgdir, uintptr_t la, struct page* pg, uint32_t perm){
+	uintptr_t pa = PADDR(page2kva(pg));
+	la = ROUNDDOWN(la, PAGE_SIZE);
+	pa = ROUNDDOWN(pa, PAGE_SIZE);
+	pte_t *ptep = get_pte(pgdir, la, 1);
+	if(!ptep)
+		return -1;
+	ptep_map(ptep, pa);
+	ptep_set_perm(ptep, PTE_P | perm);
 }
 
 //boot_map_segment - setup&enable the paging mechanism
@@ -247,11 +259,17 @@ extern void __sys_entry();
 extern char sys_stacktop[];
  extern void v7_flush_kern_dcache_area(void *addr, size_t size);
 
+#define ELF_MAPPING_ENCRYPTED_START 0xE0000000
 static void build_elf_mapping(pde_t *pgdir, struct elf_info *info)
 {
 	int i;
 	for(i = 0; i < info->nmap; i++){
-		boot_map_segment(pgdir, info->mapping[i].addr, info->mapping[i].limit, info->mapping[i].addr, PTE_W);
+		//decrypt on prefetch
+		if(info->mapping[i].flags & ELF_PROG_ENCRYPTED){
+			boot_map_segment(pgdir, info->mapping[i].addr+ELF_MAPPING_ENCRYPTED_START, info->mapping[i].limit, info->mapping[i].addr, 0);
+		}else{
+			boot_map_segment(pgdir, info->mapping[i].addr, info->mapping[i].limit, info->mapping[i].addr, PTE_W);
+		}
 	}
 	tlb_invalidate_all();
 }
@@ -299,17 +317,66 @@ void sys_entry(){
 void syscall_passthrough(struct trapframe*);
 void syscall_passthrough_fast(struct pushregs*);
 
+struct elf_mapping* pgfault_find_mapping(uint32_t far){
+	int i;
+	for(i = 0;i < elf_info.nmap;i++){
+		uintptr_t start = elf_info.mapping[i].addr;
+		uintptr_t end = start + elf_info.mapping[i].limit;
+		if(far >= start && far < end)
+			return &elf_info.mapping[i];
+	}
+	return NULL;
+}
+
+void panic(int id){
+	__print_hex(0xffff0000);
+	__print_hex(id);
+	while(1);
+}
+#define assert(x) do{if(!(x)) panic(-1);}while(0)
+
+void decrypt_page(void *dst, void *src){
+	uint32_t len = PAGE_SIZE;
+	uint32_t *pd = (uint32_t*)dst;
+	uint32_t *ps = (uint32_t*)src;
+	while(len > 0){
+		*pd++ = (*ps++) ^ ELF_SIMPLE_KEY;
+		len -= 4;
+	}
+}
+
+static inline v7_flush_icache(){
+	int zero = 0;
+	asm volatile(
+		"mcr	p15, 0, %0, c7, c5, 0	@ I+BTB cache invalidate\n"
+		"isb\n"
+		::"r"(zero):
+	);
+}
+
 static int pgfault_handler(struct trapframe *tf){
-	__print_hex(0xff001111);
 	uint32_t badaddr = 0;
 	if (tf->tf_trapno == T_PABT) {
 		badaddr = tf->tf_epc;
 	} else {
 		badaddr = far();
 	}
-	__print_hex(badaddr);
+	//__print_hex(badaddr);
 	//XXX
-	while(1);
+	struct elf_mapping *mapping = pgfault_find_mapping(badaddr);
+	if(!mapping){
+		__print_hex(badaddr);
+		panic(0x1);
+	}
+	//decrypt
+	if(mapping->flags & ELF_PROG_ENCRYPTED){
+		struct page *pg = page_alloc();
+		assert(pg);
+		uintptr_t start = ROUNDDOWN(badaddr, PAGE_SIZE);
+		decrypt_page((void*)page2kva(pg), (void*)(start + ELF_MAPPING_ENCRYPTED_START));
+		map_page(boot_pgdir, start, pg, 0);
+		v7_flush_icache();
+	}
 	return 0;
 }
 
@@ -338,6 +405,24 @@ static inline void do_syscall(struct trapframe *tf){
 	switch(num){
 		case __NR_brk:
 			__sys_brk(tf);
+			break;
+		case __NR_write:
+		case __NR_read:
+			v7_flush_kern_dcache_area(tf->tf_regs.reg_r[1], tf->tf_regs.reg_r[2]);
+			syscall_passthrough_fast(&tf->tf_regs);
+			v7_flush_kern_dcache_area(tf, sizeof(*tf));
+			break;
+		case __NR_gettimeofday:
+			if(tf->tf_regs.reg_r[0])
+				v7_flush_kern_dcache_area(tf->tf_regs.reg_r[0], sizeof(struct timeval));
+			if(tf->tf_regs.reg_r[1])
+				v7_flush_kern_dcache_area(tf->tf_regs.reg_r[1], sizeof(struct timezone));
+			syscall_passthrough_fast(&tf->tf_regs);
+			v7_flush_kern_dcache_area(tf, sizeof(*tf));
+			break;
+		case __NR_getpid:
+			syscall_passthrough_fast(&tf->tf_regs);
+			v7_flush_kern_dcache_area(tf, sizeof(*tf));
 			break;
 		default:
 			v7_flush_kern_cache_all();
