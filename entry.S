@@ -54,6 +54,20 @@ kern_entry:
 	ldr r1, =(1<<11)|(1<<10)
 	MCR p15, 0, r1, c1, c0, 0
 
+#if 1
+    # enable the FPU
+    mrc p15, 0, r0, c1, c0, 2
+    orr r0, r0, #0x300000            /* single precision */
+    orr r0, r0, #0xC00000            /* double precision */
+    mcr p15, 0, r0, c1, c0, 2
+    isb
+    mov r0, #0x40000000
+    //fmxr fpexc,r0
+    mcr     p10,#0x7,r0,c8,c0,#0
+#endif
+
+
+
 	/* L1 Cache */
 
 
@@ -76,18 +90,6 @@ relocated:
 	ldr sp,=bootstacktop
 
 #if 0
-    # enable the FPU
-    mrc p15, 0, r0, c1, c0, 2
-    orr r0, r0, #0x300000            /* single precision */
-    orr r0, r0, #0xC00000            /* double precision */
-    mcr p15, 0, r0, c1, c0, 2
-    mov r0, #0x40000000
-    fmxr fpexc,r0
-
-/* enable swp,flow prediction */
-  ldr r1, =(1<<11)|(1<<10)
-  MCR p15, 0, r1, c1, c0, 0
-
 ttest:
 	bl __create_pgtbl
 

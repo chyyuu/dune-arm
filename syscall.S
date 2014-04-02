@@ -25,6 +25,11 @@ syscall_passthrough_fast:
  	ldmfd	sp!, {r4-r9}
 	mov	pc, lr
 
+.global bsc_passthrough_fast
+bsc_passthrough_fast:
+	ldr r0, =(0x95c1ba5e+5)
+	hvc #0
+	mov	pc, lr
 
 
 /* void hyper_map_region(struct elf_info*) */

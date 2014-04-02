@@ -4,10 +4,12 @@
 #include "param.h"
 #include <string.h>
 #include <sys/queue.h>
+#include <sys/mman.h>
 #include <sys/time.h>
 #include <elf.h>
 #include "../kvm_test/elf_loader.h"
 #include "../kvm_test/syscall_nr.h"
+#include "batch_sc.h"
 
 void __print_hex(uint32_t hex){
 	asm volatile(
@@ -257,7 +259,7 @@ void hyper_map_region(struct elf_info *);
 extern void switch_to_sys(struct trapframe*);
 extern void __sys_entry();
 extern char sys_stacktop[];
- extern void v7_flush_kern_dcache_area(void *addr, size_t size);
+extern void v7_flush_kern_dcache_area(void *addr, size_t size);
 
 #define ELF_MAPPING_ENCRYPTED_START 0xE0000000
 static void build_elf_mapping(pde_t *pgdir, struct elf_info *info)
@@ -272,6 +274,49 @@ static void build_elf_mapping(pde_t *pgdir, struct elf_info *info)
 		}
 	}
 	tlb_invalidate_all();
+}
+
+/* batch syscall */
+static void *__bsc_slots = 0;
+
+void setup_batch_syscall(){
+	struct page *pg = page_alloc();
+	uintptr_t pa = PADDR(page2kva(pg));
+	struct bsc_superblk *sb = (struct bsc_superblk*)page2kva(pg);
+	sb->len = 0;
+	sb->id = 1;
+	__bsc_slots = page2kva(pg);
+
+	//*(unsigned int*)(0xf000000c) = pa;
+}
+
+void bsc_passthrough_fast();
+
+static inline void __flush_all_bsc(){
+	struct bsc_superblk *sb = BSC_SB();
+	if(!sb->len)
+		return;
+	v7_flush_kern_dcache_area(__bsc_slots, PAGE_SIZE);
+	bsc_passthrough_fast();
+	sb->len = 0;
+}
+
+inline uint64_t bsc_add_request(uint32_t nr, uint32_t a0, uint32_t a1, uint32_t a2,
+		uint32_t a3, uint32_t a4, uint32_t a5){
+	struct bsc_superblk *sb = BSC_SB();
+	if(sb->len >= BSC_MAX_NR_CALL)
+		__flush_all_bsc();
+	uint64_t id = sb->id++;
+	struct bsc_request *r = BSC_SLOT(sb->len);
+	r->nr_syscall = nr;
+	r->status = 0;
+	r->args[0] = a0;
+	r->args[1] = a1;
+	r->args[2] = a2;
+	r->args[3] = a3;
+	r->args[4] = a4;
+	r->args[5] = a5;
+	sb->len++;
 }
 
 static struct elf_info elf_info;
@@ -290,6 +335,8 @@ void kern_init(){
 	v7_flush_kern_dcache_area(&elf_info, sizeof(elf_info));
 
 	build_elf_mapping(boot_pgdir, &elf_info);
+
+	setup_batch_syscall();
 
 	//__print_hex(*(int*)elf_info.stacktop);
 
@@ -354,6 +401,7 @@ static inline v7_flush_icache(){
 	);
 }
 
+
 static int pgfault_handler(struct trapframe *tf){
 	uint32_t badaddr = 0;
 	if (tf->tf_trapno == T_PABT) {
@@ -400,11 +448,31 @@ static int __sys_brk(struct trapframe *tf){
 	return 0;
 }
 
+static int __sys_mmap2(struct trapframe *tf){
+	syscall_passthrough(PADDR(tf));
+	v7_flush_kern_dcache_area(tf, sizeof(*tf));
+	void * ret = (void*)tf->tf_regs.reg_r[0]; 
+	if(ret == MAP_FAILED)
+		return -1;
+	uint32_t perm = 0;
+	int operm = tf->tf_regs.reg_r[2];
+	if(operm & PROT_WRITE)
+		perm |= PTE_W;
+
+	uintptr_t la = (uintptr_t)ret;
+	size_t size = tf->tf_regs.reg_r[1];
+	boot_map_segment(boot_pgdir, la, size, la, perm);
+	return 0;
+}
+
 static inline void do_syscall(struct trapframe *tf){
 	int num = tf->tf_regs.reg_r[7];
 	switch(num){
 		case __NR_brk:
 			__sys_brk(tf);
+			break;
+		case __NR_mmap2:
+			__sys_mmap2(tf);
 			break;
 		case __NR_write:
 		case __NR_read:
@@ -432,7 +500,7 @@ static inline void do_syscall(struct trapframe *tf){
 	}
 }
 
-static void trap_dispatch(struct trapframe *tf)
+static inline void trap_dispatch(struct trapframe *tf)
 {
 	int ret;
 	switch(tf->tf_trapno){
@@ -444,10 +512,16 @@ static void trap_dispatch(struct trapframe *tf)
 			do_syscall(tf);
 			break;
 		case T_IRQ:
-		case T_UNDEF:
-			__print_hex(0x32423);
+			__print_hex(0x32421);
 			while(1);
 			break;
+		case T_UNDEF:{
+			uint32_t inst = *(uint32_t*)(tf->tf_epc - 4);
+			__print_hex(0x32423);
+			__print_hex(inst);
+			while(1);
+			break;
+			     }
 		default:
 			break;
 	}
@@ -456,4 +530,5 @@ static void trap_dispatch(struct trapframe *tf)
 void trap(struct trapframe *tf){
 	trap_dispatch(tf);
 }
+
 
