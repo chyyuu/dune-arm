@@ -169,9 +169,6 @@ static void domainAccessSet(uint32_t value, uint32_t mask)
 		      ::"r" (c3format)
 	    );
 }
-
-/* controlSet
- * sets the control bits register in CP15:c1 */
 static void controlSet(uint32_t value, uint32_t mask)
 {
 	uint32_t c1format;
@@ -193,6 +190,7 @@ static void controlSet(uint32_t value, uint32_t mask)
  * 4. Assign domain access rights.
  * 5. Enable the memory management unit and cache hardware.
  * */
+extern void v7_mmu_cache_on();
 void mmu_init(void)
 {
 	uint32_t enable, change;
@@ -209,7 +207,8 @@ void mmu_init(void)
 #endif
 
 	/* enable cache and MMU */
-	controlSet(enable, change);
+	//controlSet(enable, change);
+	v7_mmu_cache_on();
 }
 
 void boot_pg_init(){
@@ -273,6 +272,8 @@ static void build_elf_mapping(pde_t *pgdir, struct elf_info *info)
 			boot_map_segment(pgdir, info->mapping[i].addr, info->mapping[i].limit, info->mapping[i].addr, PTE_W);
 		}
 	}
+	/* visible to HW tlb walk */
+	v7_flush_kern_cache_all();
 	tlb_invalidate_all();
 }
 
@@ -320,6 +321,10 @@ inline uint64_t bsc_add_request(uint32_t nr, uint32_t a0, uint32_t a1, uint32_t 
 }
 
 static struct elf_info elf_info;
+static inline __mark_guest_start(){
+	*(unsigned int*)(0xf000000c) = 0;
+}
+
 void kern_init(){
 	clear_bss();
 
@@ -349,15 +354,16 @@ void kern_init(){
 	tf.tf_regs.ARM_pc = (uintptr_t)elf_info.entry;
 	//tf.tf_regs.ARM_pc = (uintptr_t)__sys_entry;
 	//XXX enable int
-	//tf.tf_sr = ARM_SR_MODE_SYS;
 	tf.tf_sr = ARM_SR_MODE_SYS;
+	//tf.tf_sr = ARM_SR_MODE_USR;
+	__mark_guest_start();
 	switch_to_sys(&tf);
 
 	return;
 }
 
 void sys_entry(){
-	__print_hex(*(int*)elf_info.entry);
+	__print_hex((int*)elf_info.entry);
 	while(1);
 }
 
@@ -409,7 +415,7 @@ static int pgfault_handler(struct trapframe *tf){
 	} else {
 		badaddr = far();
 	}
-	//__print_hex(badaddr);
+	__print_hex(badaddr);
 	//XXX
 	struct elf_mapping *mapping = pgfault_find_mapping(badaddr);
 	if(!mapping){
@@ -424,6 +430,8 @@ static int pgfault_handler(struct trapframe *tf){
 		decrypt_page((void*)page2kva(pg), (void*)(start + ELF_MAPPING_ENCRYPTED_START));
 		map_page(boot_pgdir, start, pg, 0);
 		v7_flush_icache();
+	}else{
+		panic(0x2);
 	}
 	return 0;
 }
@@ -462,6 +470,10 @@ static int __sys_mmap2(struct trapframe *tf){
 	uintptr_t la = (uintptr_t)ret;
 	size_t size = tf->tf_regs.reg_r[1];
 	boot_map_segment(boot_pgdir, la, size, la, perm);
+
+	//XXX
+	v7_flush_kern_cache_all();
+	tlb_invalidate_all();
 	return 0;
 }
 
@@ -474,26 +486,13 @@ static inline void do_syscall(struct trapframe *tf){
 		case __NR_mmap2:
 			__sys_mmap2(tf);
 			break;
-		case __NR_write:
-		case __NR_read:
-			v7_flush_kern_dcache_area(tf->tf_regs.reg_r[1], tf->tf_regs.reg_r[2]);
-			syscall_passthrough_fast(&tf->tf_regs);
-			v7_flush_kern_dcache_area(tf, sizeof(*tf));
-			break;
-		case __NR_gettimeofday:
-			if(tf->tf_regs.reg_r[0])
-				v7_flush_kern_dcache_area(tf->tf_regs.reg_r[0], sizeof(struct timeval));
-			if(tf->tf_regs.reg_r[1])
-				v7_flush_kern_dcache_area(tf->tf_regs.reg_r[1], sizeof(struct timezone));
-			syscall_passthrough_fast(&tf->tf_regs);
-			v7_flush_kern_dcache_area(tf, sizeof(*tf));
-			break;
-		case __NR_getpid:
-			syscall_passthrough_fast(&tf->tf_regs);
-			v7_flush_kern_dcache_area(tf, sizeof(*tf));
+		/* hook */
+		case __NR_exit:
+			syscall_passthrough(&tf->tf_regs);
+			/* never return */
 			break;
 		default:
-			v7_flush_kern_cache_all();
+			//v7_flush_kern_cache_all();
 			//syscall_passthrough(PADDR(tf));
 			syscall_passthrough_fast(&tf->tf_regs);
 			v7_flush_kern_dcache_area(tf, sizeof(*tf));

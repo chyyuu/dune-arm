@@ -119,6 +119,7 @@
 /* Typical */
 #define PTEX_PWT (PTEX_WT << 2)	// Write Through
 #define PTEX_PIO (PTEX_cb << 2)	// Write Through
+#define PTEX_PWB (PTEX_WB << 2)	// Write back
 
 /* ARMv7 */
 #define PTEX_R   0x210		// Supervisor/Readonly
@@ -218,6 +219,11 @@ static inline void _arm_pte_setflags(pte_t * pte, pte_perm_t flags)
 	} else if (flags & PTE_IOMEM) {
 		*pte &= ~PTEX_CB_MASK;
 		*pte |= PTEX_PIO;
+	}else{
+		*pte &= ~PTEX_CB_MASK;
+		//*pte |= PTEX_PWT;
+		//writealloc, shared
+		*pte |= (1<<6) | PTEX_PWB | (1<<10);
 	}
 
 }
@@ -229,8 +235,9 @@ static inline void _arm_pte_setflags(pte_t * pte, pte_perm_t flags)
 static inline void ptep_map(pte_t * ptep, uintptr_t pa)
 {
 	//*ptep = pa|(PTEX_WB<<2);
-	*ptep = pa | (PTEX_PWT << 2);	//write through cache by default
-	_arm_pte_setflags(ptep, PTE_P);
+	//*ptep = pa | (PTEX_PWT << 2);	//write through cache by default
+	*ptep = pa | PTEX_L2_PGTYPE;
+	//_arm_pte_setflags(ptep, PTE_P);
 }
 
 static inline void pdep_map(pde_t * pdep, uintptr_t pa)
