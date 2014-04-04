@@ -12,17 +12,6 @@
 #include "../kvm_test/syscall_nr.h"
 #include "batch_sc.h"
 
-void __print_hex(uint32_t hex){
-	asm volatile(
-		"ldr r0, =0xf0000000;"
-		"mov r1, %0;"
-		"str r1, [r0];"
-		:
-		:"r"(hex)
-		:"r0","r1"
-	);
-}
-
 
 static void clear_bss(){
 	extern char edata[], end[];
@@ -89,6 +78,115 @@ struct page* page_alloc(){
 
 void page_free(struct page* pg){
 	SLIST_INSERT_HEAD(&pages_free, pg, link);
+}
+
+/* task manager(kfiber) */
+#define MAX_N_KFIBER 64
+
+typedef TAILQ_HEAD(task_head, task_struct) task_head_t;
+typedef TAILQ_ENTRY(task_struct) task_entry_t;
+
+static task_head_t free_tasks;
+static task_head_t ready_tasks;
+static task_head_t wait_tasks;
+
+struct task_struct{
+	volatile long state;
+	int runs;		// the running times of Proces
+	uintptr_t kstack;	// Process kernel stack
+	struct context context;
+	struct trapframe *tf;
+
+	int exit_code;		// return value when exit
+
+	task_entry_t link;
+};
+
+struct task_struct *current;
+
+#define TASK_STATE_FREE 1
+#define TASK_STATE_READY 2
+#define TASK_STATE_WAIT 3
+#define TASK_STATE_DIE 4
+
+static struct task_struct __task_pool[MAX_N_KFIBER];
+
+struct task_struct *alloc_task(){
+	if(TAILQ_EMPTY(&free_tasks))
+		return NULL;
+	struct task_struct *ts = TAILQ_FIRST(&free_tasks);
+	TAILQ_REMOVE(&free_tasks, ts, link);
+	return ts;
+};
+
+void free_task(struct task_struct* ts){
+	assert(0);
+	if(!ts)
+		return;
+	//if(ts->kstack)
+//		free_page(kva2page(ts->kstack));
+	if(ts->state == TASK_STATE_WAIT)
+		TAILQ_REMOVE(&wait_tasks, ts, link);
+	if(ts->state == TASK_STATE_READY)
+		TAILQ_REMOVE(&ready_tasks, ts, link);
+	ts->state = TASK_STATE_FREE;
+	TAILQ_INSERT_HEAD(&free_tasks, ts, link);
+}
+
+void init_task(struct task_struct *ts){
+	memset(ts, 0, sizeof(*ts));
+	ts->state = TASK_STATE_READY;
+	ts->runs = 0;
+	ts->kstack = (uintptr_t)page2kva(page_alloc()) + PAGE_SIZE;
+	ts->tf = 0;
+}
+
+void task_enqueue(struct task_struct *ts){
+	ts->state = TASK_STATE_READY;
+	TAILQ_INSERT_TAIL(&ready_tasks, ts, link);
+}
+
+struct task_struct * task_dequeue(){
+	if(TAILQ_EMPTY(&ready_tasks))
+		return NULL;
+	struct task_struct *ts = TAILQ_FIRST(&ready_tasks);
+	TAILQ_REMOVE(&ready_tasks, ts, link);
+	return ts;
+}
+
+void kfiber_init(){
+	int i;
+	TAILQ_INIT(&ready_tasks);
+	TAILQ_INIT(&wait_tasks);
+	TAILQ_INIT(&free_tasks);
+
+	for(i=0;i<MAX_N_KFIBER;i++){
+		__task_pool[i].state = TASK_STATE_FREE;
+		TAILQ_INSERT_HEAD(&free_tasks, &__task_pool[i], link);
+	}
+
+	/* idle */
+	struct task_struct *ts = alloc_task();
+	init_task(ts);
+	//task_enqueue(ts);
+	current = ts;
+};
+
+
+void kfiber_run_next(){
+	struct task_struct *ts = task_dequeue();
+	if(!ts){
+		panic(0x131);
+		return;
+	}
+	struct task_struct  *prev = current;
+	current = ts;
+	switch_to(&prev->context, &ts->context);
+}
+
+void kfiber_idle(void){
+	while(1)
+		kfiber_run_next();
 }
 
 /* mmu */
@@ -330,6 +428,34 @@ static inline __mark_guest_start(){
 	*(unsigned int*)(0xf000000c) = 0;
 }
 
+static void user_init(){
+	//__print_hex(*(int*)elf_info.stacktop);
+
+	//switch to sys mode
+	struct task_struct *usermain = alloc_task();
+	init_task(usermain);
+	struct trapframe *tf = usermain->kstack - sizeof(struct trapframe);
+	usermain->tf = tf;
+	//struct trapframe tf;
+	memset(tf, 0, sizeof(*tf));
+	tf->tf_regs.reg_r[0] = 0;
+	tf->tf_regs.ARM_sp = (uintptr_t)elf_info.stacktop;
+	//__print_hex(elf_info.stacktop);
+	tf->tf_regs.ARM_pc = (uintptr_t)elf_info.entry;
+	//tf.tf_regs.ARM_pc = (uintptr_t)__sys_entry;
+	//XXX enable int
+	tf->tf_sr = ARM_SR_MODE_SYS;
+	//tf.tf_sr = ARM_SR_MODE_USR;
+	
+	//kernel context
+	usermain->context.e_cpsr = ARM_SR_MODE_SVC;
+	usermain->context.esp = (uintptr_t)tf;
+	usermain->context.epc = (uintptr_t)switch_to_sys;
+
+	task_enqueue(usermain);
+
+}
+
 void kern_init(){
 	clear_bss();
 
@@ -348,22 +474,14 @@ void kern_init(){
 
 	setup_batch_syscall();
 
-	//__print_hex(*(int*)elf_info.stacktop);
+	kfiber_init();
 
-	//switch to sys mode
-	struct trapframe tf;
-	memset(&tf, 0, sizeof(tf));
-	tf.tf_regs.reg_r[0] = 0;
-	tf.tf_regs.ARM_sp = (uintptr_t)elf_info.stacktop;
-	//__print_hex(elf_info.stacktop);
-	tf.tf_regs.ARM_pc = (uintptr_t)elf_info.entry;
-	//tf.tf_regs.ARM_pc = (uintptr_t)__sys_entry;
-	//XXX enable int
-	tf.tf_sr = ARM_SR_MODE_SYS;
-	//tf.tf_sr = ARM_SR_MODE_USR;
+	user_init();
+
 	__mark_guest_start();
-	switch_to_sys(&tf);
+	//switch_to_sys(&tf);
 
+	kfiber_idle();
 	return;
 }
 
@@ -382,14 +500,6 @@ struct elf_mapping* pgfault_find_mapping(uint32_t far){
 	}
 	return NULL;
 }
-
-void panic(int id){
-	__print_hex(0xffff0000);
-	__print_hex(id);
-	while(1);
-}
-#define assert(x) do{if(!(x)) panic(-1);}while(0)
-
 void decrypt_page(void *dst, void *src){
 	uint32_t len = PAGE_SIZE;
 	uint32_t *pd = (uint32_t*)dst;

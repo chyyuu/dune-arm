@@ -369,7 +369,7 @@ forkrets:
 /* void switch_to_sys(struct trapframe*) */
 .global switch_to_sys
 switch_to_sys:
-	mov sp, r0
+	#mov sp, r0
 	ldr	r1, [sp, #S_PSR]		@ get calling cpsr
 	ldr	lr, [sp, #S_PC]!		@ get pc
 	msr	spsr_cxsf, r1			@ save in spsr_svc
