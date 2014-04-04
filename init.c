@@ -7,6 +7,7 @@
 #include <sys/mman.h>
 #include <sys/time.h>
 #include <elf.h>
+#include "hw.h"
 #include "../kvm_test/elf_loader.h"
 #include "../kvm_test/syscall_nr.h"
 #include "batch_sc.h"
@@ -110,6 +111,9 @@ pte_t *get_pte(pde_t * pgdir, uintptr_t la, int create){
 		pdep_map(pdt_entry_low+1, (uintptr_t)PADDR(pdt)+1024);
 		pdep_map(pdt_entry_low+2, (uintptr_t)PADDR(pdt)+1024*2);
 		pdep_map(pdt_entry_low+3, (uintptr_t)PADDR(pdt)+1024*3);
+
+		v7_flush_kern_dcache_area(pdt, PAGE_SIZE);
+		v7_flush_kern_dcache_area(pdt_entry_low, 4*sizeof(pde_t));
 	}
 
 	pdt = (pde_t*)KADDR(PDE_ADDR(*pdt_entry));
@@ -127,6 +131,7 @@ int map_page(pde_t *pgdir, uintptr_t la, struct page* pg, uint32_t perm){
 		return -1;
 	ptep_map(ptep, pa);
 	ptep_set_perm(ptep, PTE_P | perm);
+	v7_flush_kern_dcache_area(ptep, sizeof(pte_t));
 }
 
 //boot_map_segment - setup&enable the paging mechanism
@@ -153,6 +158,7 @@ boot_map_segment(pde_t * pgdir, uintptr_t la, size_t size, uintptr_t pa,
 		//assert(ptep != NULL);
 		ptep_map(ptep, pa);
 		ptep_set_perm(ptep, PTE_P | perm);
+		v7_flush_kern_dcache_area(ptep, sizeof(pte_t));
 	}
 }
 
@@ -258,7 +264,6 @@ void hyper_map_region(struct elf_info *);
 extern void switch_to_sys(struct trapframe*);
 extern void __sys_entry();
 extern char sys_stacktop[];
-extern void v7_flush_kern_dcache_area(void *addr, size_t size);
 
 #define ELF_MAPPING_ENCRYPTED_START 0xE0000000
 static void build_elf_mapping(pde_t *pgdir, struct elf_info *info)
@@ -286,7 +291,7 @@ void setup_batch_syscall(){
 	struct bsc_superblk *sb = (struct bsc_superblk*)page2kva(pg);
 	sb->len = 0;
 	sb->id = 1;
-	__bsc_slots = page2kva(pg);
+	__bsc_slots = (void*)page2kva(pg);
 
 	//*(unsigned int*)(0xf000000c) = pa;
 }
@@ -367,9 +372,6 @@ void sys_entry(){
 	while(1);
 }
 
-void syscall_passthrough(struct trapframe*);
-void syscall_passthrough_fast(struct pushregs*);
-
 struct elf_mapping* pgfault_find_mapping(uint32_t far){
 	int i;
 	for(i = 0;i < elf_info.nmap;i++){
@@ -397,16 +399,6 @@ void decrypt_page(void *dst, void *src){
 		len -= 4;
 	}
 }
-
-static inline v7_flush_icache(){
-	int zero = 0;
-	asm volatile(
-		"mcr	p15, 0, %0, c7, c5, 0	@ I+BTB cache invalidate\n"
-		"isb\n"
-		::"r"(zero):
-	);
-}
-
 
 static int pgfault_handler(struct trapframe *tf){
 	uint32_t badaddr = 0;
@@ -446,6 +438,7 @@ static int __sys_brk(struct trapframe *tf){
 	uintptr_t newbrk = tf->tf_regs.reg_r[0];
 	if(oldbrk < newbrk){
 		boot_map_segment(boot_pgdir, oldbrk, newbrk - oldbrk, oldbrk, PTE_W);
+
 	}else if(oldbrk > newbrk){
 		//TODO
 		__print_hex(0x1231213);
@@ -471,9 +464,6 @@ static int __sys_mmap2(struct trapframe *tf){
 	size_t size = tf->tf_regs.reg_r[1];
 	boot_map_segment(boot_pgdir, la, size, la, perm);
 
-	//XXX
-	v7_flush_kern_cache_all();
-	tlb_invalidate_all();
 	return 0;
 }
 

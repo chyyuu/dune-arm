@@ -4,7 +4,7 @@ CC=$(CROSS_COMPILE)gcc
 LD=$(CROSS_COMPILE)ld
 OBJCOPY=$(CROSS_COMPILE)objcopy
 TARGET:=payload
-OBJS:=entry.o init.o vectors.o trapentry.o syscall.o
+OBJS:=entry.o init.o vectors.o trapentry.o syscall.o hw.o
 #OBJS+= eabi_utils.o
 #OBJS+= memcpy.o memset.o 
 CFLAGS=-mcpu=cortex-a15 -I../linux_header_313_arm/include -O2 -marm
