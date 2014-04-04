@@ -8,6 +8,7 @@
 #include <sys/time.h>
 #include <elf.h>
 #include "hw.h"
+#include "kfiber.h"
 #include "../kvm_test/elf_loader.h"
 #include "../kvm_test/syscall_nr.h"
 #include "batch_sc.h"
@@ -93,7 +94,9 @@ static task_head_t wait_tasks;
 struct task_struct{
 	volatile long state;
 	int runs;		// the running times of Proces
+	int tid;
 	uintptr_t kstack;	// Process kernel stack
+	struct page* kstack_page;
 	struct context context;
 	struct trapframe *tf;
 
@@ -134,11 +137,13 @@ void free_task(struct task_struct* ts){
 }
 
 void init_task(struct task_struct *ts){
-	memset(ts, 0, sizeof(*ts));
+	//memset(ts, 0, sizeof(*ts));
 	ts->state = TASK_STATE_READY;
 	ts->runs = 0;
-	ts->kstack = (uintptr_t)page2kva(page_alloc()) + PAGE_SIZE;
+	ts->tid = 0;
+	ts->kstack = (uintptr_t)page2kva(ts->kstack_page) + PAGE_SIZE;
 	ts->tf = 0;
+	memset(&ts->context, 0, sizeof(ts->context));
 }
 
 void task_enqueue(struct task_struct *ts){
@@ -162,6 +167,8 @@ void kfiber_init(){
 
 	for(i=0;i<MAX_N_KFIBER;i++){
 		__task_pool[i].state = TASK_STATE_FREE;
+		/* XXX hack */
+		__task_pool[i].kstack_page = page_alloc();
 		TAILQ_INSERT_HEAD(&free_tasks, &__task_pool[i], link);
 	}
 
@@ -170,7 +177,7 @@ void kfiber_init(){
 	init_task(ts);
 	//task_enqueue(ts);
 	current = ts;
-};
+}
 
 
 void kfiber_run_next(){
@@ -382,6 +389,7 @@ static void build_elf_mapping(pde_t *pgdir, struct elf_info *info)
 
 /* batch syscall */
 static void *__bsc_slots = 0;
+static int bsc_enabled = 0;
 
 void setup_batch_syscall(){
 	struct page *pg = page_alloc();
@@ -428,20 +436,22 @@ static inline __mark_guest_start(){
 	*(unsigned int*)(0xf000000c) = 0;
 }
 
-static void user_init(){
+static struct task_struct* kfiber_create(uintptr_t entry, uintptr_t stacktop, void* data){
 	//__print_hex(*(int*)elf_info.stacktop);
 
 	//switch to sys mode
 	struct task_struct *usermain = alloc_task();
+	if(!usermain)
+		return NULL;
 	init_task(usermain);
 	struct trapframe *tf = usermain->kstack - sizeof(struct trapframe);
 	usermain->tf = tf;
 	//struct trapframe tf;
 	memset(tf, 0, sizeof(*tf));
-	tf->tf_regs.reg_r[0] = 0;
-	tf->tf_regs.ARM_sp = (uintptr_t)elf_info.stacktop;
+	tf->tf_regs.reg_r[0] = (uint32_t)data;
+	tf->tf_regs.ARM_sp = stacktop;
 	//__print_hex(elf_info.stacktop);
-	tf->tf_regs.ARM_pc = (uintptr_t)elf_info.entry;
+	tf->tf_regs.ARM_pc = entry;
 	//tf.tf_regs.ARM_pc = (uintptr_t)__sys_entry;
 	//XXX enable int
 	tf->tf_sr = ARM_SR_MODE_SYS;
@@ -452,8 +462,13 @@ static void user_init(){
 	usermain->context.esp = (uintptr_t)tf;
 	usermain->context.epc = (uintptr_t)switch_to_sys;
 
-	task_enqueue(usermain);
+	return usermain;
+}
 
+static void user_init(){
+	struct task_struct *usermain = kfiber_create((uintptr_t)elf_info.entry, 
+			(uintptr_t)elf_info.stacktop, NULL);
+	task_enqueue(usermain);
 }
 
 void kern_init(){
@@ -500,6 +515,7 @@ struct elf_mapping* pgfault_find_mapping(uint32_t far){
 	}
 	return NULL;
 }
+
 void decrypt_page(void *dst, void *src){
 	uint32_t len = PAGE_SIZE;
 	uint32_t *pd = (uint32_t*)dst;
@@ -577,6 +593,30 @@ static int __sys_mmap2(struct trapframe *tf){
 	return 0;
 }
 
+
+void __sys_kfiber_create(struct trapframe* tf){
+	int r = -1; 
+	struct task_struct *ts = kfiber_create((uintptr_t)tf->tf_regs.reg_r[0],
+			(uintptr_t)tf->tf_regs.reg_r[1],
+			(void*)tf->tf_regs.reg_r[2]);
+	if(ts)
+		r = ts->tid;
+	tf->tf_regs.reg_r[0] = r;
+	task_enqueue(ts);
+}
+
+void __sys_kfiber_exit(struct trapframe* tf){
+	current->state = TASK_STATE_FREE;
+	TAILQ_INSERT_TAIL(&free_tasks, current, link);
+	kfiber_run_next();
+}
+
+void __sys_kfiber_yield(struct trapframe* tf){
+	current->state = TASK_STATE_READY;
+	TAILQ_INSERT_TAIL(&ready_tasks, current, link);
+	kfiber_run_next();
+}
+
 static inline void do_syscall(struct trapframe *tf){
 	int num = tf->tf_regs.reg_r[7];
 	switch(num){
@@ -591,11 +631,32 @@ static inline void do_syscall(struct trapframe *tf){
 			syscall_passthrough(&tf->tf_regs);
 			/* never return */
 			break;
+		case __NR_kfiber_create:
+			__sys_kfiber_create(tf);
+			bsc_enabled = 1;
+			break;
 		default:
 			//v7_flush_kern_cache_all();
 			//syscall_passthrough(PADDR(tf));
 			syscall_passthrough_fast(&tf->tf_regs);
 			v7_flush_kern_dcache_area(tf, sizeof(*tf));
+	}
+}
+
+static inline void do_bsc_syscall(struct trapframe *tf){
+	int num = tf->tf_regs.reg_r[7];
+	switch(num){
+		case __NR_kfiber_create:
+			__sys_kfiber_create(tf);
+			break;
+		case __NR_kfiber_exit:
+			__sys_kfiber_exit(tf);
+			break;
+		case __NR_kfiber_yield:
+			__sys_kfiber_yield(tf);
+			break;
+		default:
+			do_syscall(tf);
 	}
 }
 
@@ -608,7 +669,10 @@ static inline void trap_dispatch(struct trapframe *tf)
 			pgfault_handler(tf);
 			break;
 		case T_SWI:
-			do_syscall(tf);
+			if(bsc_enabled)
+				do_syscall(tf);
+			else
+				do_bsc_syscall(tf);
 			break;
 		case T_IRQ:
 			__print_hex(0x32421);
