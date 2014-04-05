@@ -187,6 +187,32 @@ static inline uint32_t far(void)
 	return c6format;
 }
 
+/* 16 domains */
+static inline void domainAccessSet(uint32_t value, uint32_t mask)
+{
+	uint32_t c3format;
+	asm volatile ("MRC p15, 0, %0, c3, c0, 0"	/* read domain register */
+		      :"=r" (c3format)
+	    );
+	c3format &= ~mask;	/* clear bits that change */
+	c3format |= value;	/* set bits that change */
+	asm volatile ("MCR p15, 0, %0, c3, c0, 0"	/* write domain register */
+		      ::"r" (c3format)
+	    );
+}
+static inline void controlSet(uint32_t value, uint32_t mask)
+{
+	uint32_t c1format;
+	asm volatile ("MRC p15, 0, %0, c1, c0, 0"	/* read control register */
+		      :"=r" (c1format)
+	    );
+	c1format &= ~mask;	/* clear bits that change */
+	c1format |= value;	/* set bits that change */
+	asm volatile ("MCR p15, 0, %0, c1, c0, 0"	/* write control register */
+		      ::"r" (c1format)
+	    );
+}
+
 
 // L2 PTE setter
 // Set the ucore flags directly, and the hardware flags under condition

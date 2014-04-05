@@ -13,6 +13,7 @@
 #include "../kvm_test/syscall_nr.h"
 #include "batch_sc.h"
 
+static struct elf_info elf_info;
 
 static void clear_bss(){
 	extern char edata[], end[];
@@ -100,6 +101,8 @@ struct task_struct{
 	struct context context;
 	struct trapframe *tf;
 
+	volatile long wait_state;
+
 	int exit_code;		// return value when exit
 
 	task_entry_t link;
@@ -111,6 +114,7 @@ struct task_struct *current;
 #define TASK_STATE_READY 2
 #define TASK_STATE_WAIT 3
 #define TASK_STATE_DIE 4
+#define TASK_WAIT_STATUS_SYSCALL (1<<0)
 
 static struct task_struct __task_pool[MAX_N_KFIBER];
 
@@ -143,6 +147,7 @@ void init_task(struct task_struct *ts){
 	ts->tid = 0;
 	ts->kstack = (uintptr_t)page2kva(ts->kstack_page) + PAGE_SIZE;
 	ts->tf = 0;
+	ts->wait_state = 0;
 	memset(&ts->context, 0, sizeof(ts->context));
 }
 
@@ -179,11 +184,11 @@ void kfiber_init(){
 	current = ts;
 }
 
-
+/* RR */
 void kfiber_run_next(){
 	struct task_struct *ts = task_dequeue();
 	if(!ts){
-		panic(0x131);
+		panic(0x1);
 		return;
 	}
 	struct task_struct  *prev = current;
@@ -191,9 +196,32 @@ void kfiber_run_next(){
 	switch_to(&prev->context, &ts->context);
 }
 
+void kfiber_yield(){
+	task_enqueue(current);
+	kfiber_run_next();
+}
+
+void kfiber_wait(long cause){
+	current->state = TASK_STATE_WAIT;
+	current->wait_state |= cause;
+	TAILQ_INSERT_TAIL(&wait_tasks, current, link);
+	kfiber_run_next();
+}
+
+void __flush_all_bsc();
 void kfiber_idle(void){
-	while(1)
-		kfiber_run_next();
+	while(1){
+		/* no kfiber can proccee, do all syscall */
+#if 1
+		if(TAILQ_EMPTY(&ready_tasks)){
+			struct bsc_superblk *sb = BSC_SB();
+			if(sb->len)
+				__flush_all_bsc();
+		}
+#endif
+		//yield
+		kfiber_yield();
+	}
 }
 
 /* mmu */
@@ -265,32 +293,6 @@ boot_map_segment(pde_t * pgdir, uintptr_t la, size_t size, uintptr_t pa,
 		ptep_set_perm(ptep, PTE_P | perm);
 		v7_flush_kern_dcache_area(ptep, sizeof(pte_t));
 	}
-}
-
-/* 16 domains */
-static void domainAccessSet(uint32_t value, uint32_t mask)
-{
-	uint32_t c3format;
-	asm volatile ("MRC p15, 0, %0, c3, c0, 0"	/* read domain register */
-		      :"=r" (c3format)
-	    );
-	c3format &= ~mask;	/* clear bits that change */
-	c3format |= value;	/* set bits that change */
-	asm volatile ("MCR p15, 0, %0, c3, c0, 0"	/* write domain register */
-		      ::"r" (c3format)
-	    );
-}
-static void controlSet(uint32_t value, uint32_t mask)
-{
-	uint32_t c1format;
-	asm volatile ("MRC p15, 0, %0, c1, c0, 0"	/* read control register */
-		      :"=r" (c1format)
-	    );
-	c1format &= ~mask;	/* clear bits that change */
-	c1format |= value;	/* set bits that change */
-	asm volatile ("MCR p15, 0, %0, c1, c0, 0"	/* write control register */
-		      ::"r" (c1format)
-	    );
 }
 
 /* mmu_init - initialize the virtual memory management */
@@ -388,28 +390,47 @@ static void build_elf_mapping(pde_t *pgdir, struct elf_info *info)
 }
 
 /* batch syscall */
-static void *__bsc_slots = 0;
+void *__bsc_slots = 0;
 static int bsc_enabled = 0;
 
 void setup_batch_syscall(){
 	struct page *pg = page_alloc();
 	uintptr_t pa = PADDR(page2kva(pg));
-	struct bsc_superblk *sb = (struct bsc_superblk*)page2kva(pg);
+	int idx = ELF_GET_BSC_IDX(elf_info);
+	struct bsc_superblk *sb = (struct bsc_superblk*)
+		elf_info.mapping[idx].addr;
 	sb->len = 0;
 	sb->id = 1;
-	__bsc_slots = (void*)page2kva(pg);
+	__bsc_slots = (void*)sb;
 
 	//*(unsigned int*)(0xf000000c) = pa;
 }
 
-void bsc_passthrough_fast();
 
-static inline void __flush_all_bsc(){
+void __flush_all_bsc(){
 	struct bsc_superblk *sb = BSC_SB();
+	int i;
 	if(!sb->len)
 		return;
 	v7_flush_kern_dcache_area(__bsc_slots, PAGE_SIZE);
 	bsc_passthrough_fast();
+	//__print_hex(0x2323);
+	//__print_hex(sb->len);
+	/* we assume one call per kfiber */
+	for(i=0;i<sb->len;i++){
+		struct bsc_request *slot = BSC_SLOT(i);
+		struct task_struct *ts = (struct task_struct*)slot->opaque;
+		if(ts->state != TASK_STATE_WAIT || 
+			!(ts->wait_state & TASK_WAIT_STATUS_SYSCALL))
+			continue;
+		/* return and wake up */
+		ts->tf->tf_regs.reg_r[0] = slot->ret;
+		//__print_hex(slot->ret);
+		ts->wait_state &= ~TASK_WAIT_STATUS_SYSCALL;
+		TAILQ_REMOVE(&wait_tasks, ts, link);
+		task_enqueue(ts);
+	}
+	//__print_hex(sb->len);
 	sb->len = 0;
 }
 
@@ -429,9 +450,23 @@ inline uint64_t bsc_add_request(uint32_t nr, uint32_t a0, uint32_t a1, uint32_t 
 	r->args[4] = a4;
 	r->args[5] = a5;
 	sb->len++;
+	r->opaque = current;
+	return id;
 }
 
-static struct elf_info elf_info;
+static inline uint64_t __bsc_add_request(struct trapframe *tf){
+	uint64_t id = bsc_add_request(
+			tf->tf_regs.reg_r[7],
+			tf->tf_regs.reg_r[0],
+			tf->tf_regs.reg_r[1],
+			tf->tf_regs.reg_r[2],
+			tf->tf_regs.reg_r[3],
+			tf->tf_regs.reg_r[4],
+			tf->tf_regs.reg_r[5]
+	);
+	return id;
+}
+
 static inline __mark_guest_start(){
 	*(unsigned int*)(0xf000000c) = 0;
 }
@@ -440,12 +475,12 @@ static struct task_struct* kfiber_create(uintptr_t entry, uintptr_t stacktop, vo
 	//__print_hex(*(int*)elf_info.stacktop);
 
 	//switch to sys mode
-	struct task_struct *usermain = alloc_task();
-	if(!usermain)
+	struct task_struct *ts = alloc_task();
+	if(!ts)
 		return NULL;
-	init_task(usermain);
-	struct trapframe *tf = usermain->kstack - sizeof(struct trapframe);
-	usermain->tf = tf;
+	init_task(ts);
+	struct trapframe *tf = ts->kstack - sizeof(struct trapframe);
+	ts->tf = tf;
 	//struct trapframe tf;
 	memset(tf, 0, sizeof(*tf));
 	tf->tf_regs.reg_r[0] = (uint32_t)data;
@@ -458,11 +493,11 @@ static struct task_struct* kfiber_create(uintptr_t entry, uintptr_t stacktop, vo
 	//tf.tf_sr = ARM_SR_MODE_USR;
 	
 	//kernel context
-	usermain->context.e_cpsr = ARM_SR_MODE_SVC;
-	usermain->context.esp = (uintptr_t)tf;
-	usermain->context.epc = (uintptr_t)switch_to_sys;
+	ts->context.e_cpsr = ARM_SR_MODE_SVC;
+	ts->context.esp = (uintptr_t)tf;
+	ts->context.epc = (uintptr_t)switch_to_sys;
 
-	return usermain;
+	return ts;
 }
 
 static void user_init(){
@@ -612,8 +647,13 @@ void __sys_kfiber_exit(struct trapframe* tf){
 }
 
 void __sys_kfiber_yield(struct trapframe* tf){
-	current->state = TASK_STATE_READY;
-	TAILQ_INSERT_TAIL(&ready_tasks, current, link);
+	//XXX flush bsc to avoid dead lock in userspace
+	kfiber_yield();
+}
+
+void __sys_kfiber_wait(struct trapframe* tf){
+	current->state = TASK_STATE_WAIT;
+	TAILQ_INSERT_TAIL(&wait_tasks, current, link);
 	kfiber_run_next();
 }
 
@@ -631,9 +671,8 @@ static inline void do_syscall(struct trapframe *tf){
 			syscall_passthrough(&tf->tf_regs);
 			/* never return */
 			break;
-		case __NR_kfiber_create:
-			__sys_kfiber_create(tf);
-			bsc_enabled = 1;
+		case __NR_bsc_enable:
+			bsc_enabled = tf->tf_regs.reg_r[0] != 0;
 			break;
 		default:
 			//v7_flush_kern_cache_all();
@@ -655,8 +694,18 @@ static inline void do_bsc_syscall(struct trapframe *tf){
 		case __NR_kfiber_yield:
 			__sys_kfiber_yield(tf);
 			break;
-		default:
+		case __NR_bsc_flush:
+			__flush_all_bsc();
+			break;
+		case __NR_brk:
+		case __NR_mmap2:
+		case __NR_exit:
 			do_syscall(tf);
+		default:
+			__bsc_add_request(tf);
+			kfiber_wait(TASK_WAIT_STATUS_SYSCALL);
+			//__sys_kfiber_wait(tf);
+			//__sys_kfiber_yield(tf);
 	}
 }
 
@@ -669,7 +718,7 @@ static inline void trap_dispatch(struct trapframe *tf)
 			pgfault_handler(tf);
 			break;
 		case T_SWI:
-			if(bsc_enabled)
+			if(!bsc_enabled)
 				do_syscall(tf);
 			else
 				do_bsc_syscall(tf);
