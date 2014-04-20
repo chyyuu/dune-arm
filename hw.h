@@ -3,7 +3,7 @@
 
 #include "trap.h"
 extern void v7_flush_kern_dcache_area(void *addr, size_t size);
-void syscall_passthrough(struct trapframe*);
+void syscall_passthrough(struct pushregs*);
 void syscall_passthrough_fast(struct pushregs*);
 
 void bsc_passthrough_fast();

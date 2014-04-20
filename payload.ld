@@ -35,28 +35,6 @@ SECTIONS {
     PROVIDE(__kernel_text_end = .);
     PROVIDE(etext = .); /* Define the 'etext' symbol to this value */
 
-    .rodata : {
-        *(.rodata .rodata.* .gnu.linkonce.r.*)
-        . = ALIGN(4);
-        PROVIDE(__arch_info_begin = .);
-        *(.arch.info.init)
-        PROVIDE(__arch_info_end = .);
-        . = ALIGN(4);
-        PROVIDE(__start___param = .);
-        *(__param)
-        PROVIDE(__stop___param = .);
-        . = ALIGN(4);
-        PROVIDE(__start___ksymtab = .);
-        *(__ksymtab)
-        PROVIDE(__stop___ksymtab = .);
-        . = ALIGN(4);
-        PROVIDE(__start___ksymtab_gpl = .);
-        *(__ksymtab_gpl)
-        PROVIDE(__stop___ksymtab_gpl = .);
-        . = ALIGN(4);
-        *(__ksymtab_strings)
-    }
-
     /* Include debugging information in kernel memory */
     .stab : {
         PROVIDE(__STAB_BEGIN__ = .);
@@ -78,9 +56,24 @@ SECTIONS {
      * QEMU only load .text and .data
      * However, our own loader will load all sections.
      */
+	/* objcopy only copy text and data sections ... */
     .data : {
         *(.data)
+	*(.data.rel.local)
         *(.init.data)
+        . = ALIGN(4);
+        *(.rodata .rodata.* .gnu.linkonce.r.*)
+	*(.got.plt) *(.got)
+
+     PROVIDE_HIDDEN (__preinit_array_start = .); 
+     KEEP (*(.preinit_array))
+     PROVIDE_HIDDEN (__preinit_array_end = .); 
+     PROVIDE_HIDDEN (__init_array_start = .); 
+     KEEP (*(.init_array*))
+     PROVIDE_HIDDEN (__init_array_end = .); 
+     PROVIDE_HIDDEN (__fini_array_start = .); 
+     KEEP (*(.fini_array*))
+     PROVIDE_HIDDEN (__fini_array_end = .); 
         . = ALIGN(4096);
     }
 

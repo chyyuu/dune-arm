@@ -3,6 +3,7 @@
 #include "trap.h"
 #include "param.h"
 #include <string.h>
+#include <stdarg.h>
 #include <sys/queue.h>
 #include <sys/mman.h>
 #include <sys/time.h>
@@ -506,6 +507,28 @@ static void user_init(){
 	task_enqueue(usermain);
 }
 
+void libc_init(){
+
+	extern void (*__preinit_array_start []) (void) ;
+	extern void (*__preinit_array_end []) (void) ;
+	extern void (*__init_array_start []) (void);
+	extern void (*__init_array_end []) (void) ;
+	{
+		const size_t size = __preinit_array_end - __preinit_array_start;
+		__print_hex(size);
+		size_t i;
+		for (i = 0; i < size; i++)
+			(*__preinit_array_start [i]) ();
+	}
+	{
+		const size_t size = __init_array_end - __init_array_start;
+		__print_hex(size);
+		size_t i;
+		for (i = 0; i < size; i++)
+			(*__init_array_start [i]) ();
+	}
+}
+
 void kern_init(){
 	clear_bss();
 
@@ -525,6 +548,8 @@ void kern_init(){
 	setup_batch_syscall();
 
 	kfiber_init();
+
+	libc_init();
 
 	user_init();
 
@@ -568,11 +593,11 @@ static int pgfault_handler(struct trapframe *tf){
 	} else {
 		badaddr = far();
 	}
+	__print_hex(tf->tf_epc);
 	__print_hex(badaddr);
 	//XXX
 	struct elf_mapping *mapping = pgfault_find_mapping(badaddr);
 	if(!mapping){
-		__print_hex(badaddr);
 		panic(0x1);
 	}
 	//decrypt
@@ -593,7 +618,7 @@ static int __sys_brk(struct trapframe *tf){
 	int heap_idx = ELF_GET_HEAP_IDX(elf_info);
 	uintptr_t oldbrk = elf_info.mapping[heap_idx].addr + elf_info.mapping[heap_idx].limit;
 
-	syscall_passthrough(PADDR(tf));
+	syscall_passthrough((struct pushregs*)PADDR(tf));
 	v7_flush_kern_dcache_area(tf, sizeof(*tf));
 
 	uintptr_t newbrk = tf->tf_regs.reg_r[0];
@@ -611,7 +636,7 @@ static int __sys_brk(struct trapframe *tf){
 }
 
 static int __sys_mmap2(struct trapframe *tf){
-	syscall_passthrough(PADDR(tf));
+	syscall_passthrough((struct pushregs*)PADDR(tf));
 	v7_flush_kern_dcache_area(tf, sizeof(*tf));
 	void * ret = (void*)tf->tf_regs.reg_r[0]; 
 	if(ret == MAP_FAILED)
@@ -657,6 +682,28 @@ void __sys_kfiber_wait(struct trapframe* tf){
 	kfiber_run_next();
 }
 
+#define KERN_SYSCALL_RELOC(x) (((uintptr_t)x) - 0xc0000000 + elf_info.kern_reloc)
+static int kwrite(int fd, void *buf, size_t len){
+	struct pushregs tf;
+	tf.reg_r[7] = __NR_write;
+	tf.reg_r[0] = fd;
+	tf.reg_r[1] = KERN_SYSCALL_RELOC(buf);
+	tf.reg_r[2] = len;
+	syscall_passthrough_fast(&tf);
+	return tf.reg_r[0];
+}
+
+void printk( const char * format, ... )
+{
+	static char buffer[4096];
+	int len = 0;
+	va_list args;
+	va_start (args, format);
+	len = vsnprintf (buffer, 4096, format, args);
+	va_end (args);
+	kwrite(2, buffer, len);
+}
+
 static inline void do_syscall(struct trapframe *tf){
 	int num = tf->tf_regs.reg_r[7];
 	switch(num){
@@ -666,7 +713,7 @@ static inline void do_syscall(struct trapframe *tf){
 		case __NR_mmap2:
 			__sys_mmap2(tf);
 			break;
-		/* hook */
+			/* hook */
 		case __NR_exit:
 			syscall_passthrough(&tf->tf_regs);
 			/* never return */
@@ -679,6 +726,7 @@ static inline void do_syscall(struct trapframe *tf){
 			//syscall_passthrough(PADDR(tf));
 			syscall_passthrough_fast(&tf->tf_regs);
 			v7_flush_kern_dcache_area(tf, sizeof(*tf));
+			//printk("syscall%d %ld\n", num, tf->tf_regs.reg_r[0]);
 	}
 }
 
@@ -728,14 +776,14 @@ static inline void trap_dispatch(struct trapframe *tf)
 			while(1);
 			break;
 		case T_UNDEF:{
-			uint32_t inst = *(uint32_t*)(tf->tf_epc - 4);
-			__print_hex(0x32423);
-			__print_hex(inst);
-			while(1);
-			break;
+				     uint32_t inst = *(uint32_t*)(tf->tf_epc - 4);
+				     __print_hex(0x32423);
+				     __print_hex(inst);
+				     while(1);
+				     break;
 			     }
 		default:
-			break;
+			     break;
 	}
 }
 
